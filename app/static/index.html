@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>即時會議語音翻譯系統 | Real-time Meeting Translator</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="8" y1="22" x2="16" y2="22"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="app-title">即時會議語音翻譯</h1>
+          <span class="app-subtitle">Real-time Meeting Speech Transcriber &amp; Translator</span>
+        </div>
+      </div>
+
+      <!-- Controls & Status -->
+      <div class="header-right">
+        <div class="status-badge" id="statusBadge">
+          <span class="status-dot"></span>
+          <span id="statusText">待命就緒</span>
+        </div>
+        <button id="themeToggleBtn" class="icon-button" title="切換深淺模式">
+          <svg id="themeIcon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/>
+            <line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Toolbar / Settings -->
+    <div class="toolbar">
+      <div class="tool-group">
+        <!-- Mic Select -->
+        <label for="micSelect" class="tool-label">收音麥克風：</label>
+        <select id="micSelect" class="styled-select"></select>
+      </div>
+
+      <div class="tool-group">
+        <label for="sourceLangSelect" class="tool-label">語音來源：</label>
+        <select id="sourceLangSelect" class="styled-select">
+          <option value="auto">自動偵測 (Auto Detect)</option>
+          <option value="en" selected>英語 (English)</option>
+          <option value="zh">中文 (Chinese)</option>
+          <option value="ja">日語 (Japanese)</option>
+          <option value="ko">韓語 (Korean)</option>
+          <option value="fr">法語 (French)</option>
+          <option value="de">德語 (German)</option>
+        </select>
+      </div>
+
+      <div class="tool-group">
+        <label for="targetLangSelect" class="tool-label">翻譯目標：</label>
+        <select id="targetLangSelect" class="styled-select">
+          <option value="zh-TW" selected>繁體中文 (Traditional Chinese)</option>
+          <option value="en">英語 (English)</option>
+          <option value="ja">日語 (Japanese)</option>
+        </select>
+      </div>
+
+      <div class="tool-group">
+        <label for="modelSelect" class="tool-label">離線模型：</label>
+        <select id="modelSelect" class="styled-select">
+          <option value="tiny">Tiny (超極速)</option>
+          <option value="base" selected>Base (推薦平衡)</option>
+          <option value="small">Small (高準確率)</option>
+        </select>
+      </div>
+
+      <!-- Main Action Button -->
+      <button id="toggleRecordBtn" class="action-button start-btn">
+        <svg id="btnIconMic" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="8" y1="22" x2="16" y2="22"/>
+        </svg>
+        <span id="btnText">開始會議收音</span>
+      </button>
+    </div>
+
+    <!-- Live Floating Subtitle Banner (Meeting CC Mode) -->
+    <section class="live-subtitle-card" id="subtitleCard">
+      <div class="subtitle-card-header">
+        <div class="card-tag">
+          <span class="live-pulse" id="livePulse"></span>
+          <span>即時會議字幕 (Live Captions)</span>
+        </div>
+        <!-- Audio Visualizer Waves -->
+        <div class="audio-meter-container">
+          <div class="audio-bars" id="audioBars">
+            <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+          </div>
+          <span class="audio-db-text" id="audioDbText">靜音中</span>
+        </div>
+        <div class="card-actions">
+          <button id="fontSizeDownBtn" class="tiny-btn" title="縮小字體">A-</button>
+          <button id="fontSizeUpBtn" class="tiny-btn" title="放大字體">A+</button>
+          <button id="toggleDualSubBtn" class="tiny-btn active" title="雙語/純翻譯切換">雙語模式</button>
+          <button id="fullscreenSubBtn" class="tiny-btn" title="全螢幕字幕模式">全螢幕</button>
+        </div>
+      </div>
+
+      <div class="live-subtitle-body" id="liveSubtitleBody">
+        <div class="original-box" id="liveOriginal">
+          <span class="placeholder-text">點擊上方「開始會議收音」以啟動即時聽寫與翻譯...</span>
+        </div>
+        <div class="translated-box" id="liveTranslated">
+          <span class="placeholder-text">翻譯字幕將即時顯示在此處</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Meeting Transcript Section -->
+    <section class="transcript-section">
+      <div class="section-header">
+        <div class="section-title">
+          <h2>會議逐字稿記錄 (Full Transcript)</h2>
+          <span class="badge" id="transcriptCount">0 則紀錄</span>
+        </div>
+        <div class="section-actions">
+          <label class="autoscroll-toggle">
+            <input type="checkbox" id="autoScrollCheck" checked>
+            <span>自動捲動</span>
+          </label>
+          <button id="clearTranscriptBtn" class="secondary-btn" title="清空紀錄">清空</button>
+          <button id="copyAllBtn" class="secondary-btn" title="複製全部記錄">複製全部</button>
+          <button id="exportMdBtn" class="primary-btn-sm" title="匯出 Markdown 會議紀錄">匯出會議紀錄 (.md)</button>
+        </div>
+      </div>
+
+      <!-- Transcript List Container -->
+      <div class="transcript-list" id="transcriptList">
+        <div class="empty-state" id="emptyState">
+          <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <p>尚未有任何會議對話紀錄</p>
+          <small>請按下「開始會議收音」，對著麥克風說話即可產生即時逐字稿與翻譯</small>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs and databases
+*.log
+*.sqlite
+*.sqlite3
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Environments and IDE
+.env
+.env.local
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Flutter artifacts
+flutter_app/build/
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.pub/
+flutter_app/.pub-cache/
+
+# Audio / temporary output files
+*.wav
+*.mp3
+*.pcm
+*.flac
+*.m4a
