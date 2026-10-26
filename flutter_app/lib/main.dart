@@ -1,27 +1,31 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
+
 import 'models/transcript_segment.dart';
-import 'services/audio_service.dart';
-import 'services/websocket_service.dart';
+import 'services/speech_service.dart';
+import 'services/translation_service.dart';
 import 'ui/floating_subtitle_card.dart';
 import 'ui/transcript_list_view.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Desktop macOS Window Customization
+  // Desktop window configuration (macOS)
   if (Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const windowOptions = WindowOptions(
-      size: Size(850, 680),
-      minimumSize: Size(480, 360),
+      size: Size(580, 840),
+      minimumSize: Size(420, 600),
       center: true,
       backgroundColor: Colors.transparent,
       skipTaskbar: false,
-      title: "即時會議語音翻譯 (Meeting Translator)",
+      title: "即時會議翻譯 (獨立運行版)",
+      titleBarStyle: TitleBarStyle.normal,
     );
+
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
@@ -37,16 +41,16 @@ class MeetingTranslatorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '即時會議翻譯',
+      title: "即時會議翻譯",
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0F172A),
+        scaffoldBackgroundColor: const Color(0xFF0F172A), // Dark slate theme
         colorScheme: const ColorScheme.dark(
           primary: CupertinoColors.activeBlue,
           surface: Color(0xFF1E293B),
         ),
-        fontFamily: Platform.isIOS || Platform.isMacOS ? '.SF Pro Text' : null,
+        useMaterial3: true,
       ),
       home: const MeetingMainScreen(),
     );
@@ -61,12 +65,12 @@ class MeetingMainScreen extends StatefulWidget {
 }
 
 class _MeetingMainScreenState extends State<MeetingMainScreen> {
-  late final WebSocketService _wsService;
-  late final AudioService _audioService;
+  late final SpeechService _speechService;
+  late final TranslationService _translationService;
 
-  String _serverUrl = "ws://127.0.0.1:8000/ws/live";
   String _sourceLang = "en";
   String _targetLang = "zh-TW";
+  String _geminiApiKey = "";
 
   final List<TranscriptSegment> _activeQueue = [];
   final List<TranscriptSegment> _history = [];
@@ -76,6 +80,26 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
   double _subtitleFontSize = 24.0;
   bool _isDualMode = true;
   bool _isAlwaysOnTop = false;
+
+  Timer? _debounceTimer;
+
+  final Map<String, String> _sourceLanguages = {
+    "en": "英語 (English)",
+    "zh": "中文 (Chinese)",
+    "ja": "日語 (Japanese)",
+    "ko": "韓語 (Korean)",
+    "fr": "法語 (French)",
+    "de": "德語 (German)",
+    "es": "西班牙語 (Spanish)",
+  };
+
+  final Map<String, String> _targetLanguages = {
+    "zh-TW": "繁體中文 (Traditional Chinese)",
+    "zh-CN": "簡體中文 (Simplified Chinese)",
+    "en": "英語 (English)",
+    "ja": "日語 (Japanese)",
+    "ko": "韓語 (Korean)",
+  };
 
   void _commitToHistory(TranscriptSegment item) {
     if (item.originalText.trim().isEmpty) return;
@@ -101,18 +125,15 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
   @override
   void initState() {
     super.initState();
-    if (Platform.isIOS || Platform.isAndroid) {
-      _serverUrl = "ws://192.168.68.55:8000/ws/live";
-    }
-    _wsService = WebSocketService();
-    _audioService = AudioService(_wsService);
+    _speechService = SpeechService();
+    _translationService = TranslationService();
 
     _setupListeners();
   }
 
   void _setupListeners() {
     // Listen for volume changes for audio meter
-    _audioService.onVolumeChanged.listen((vol) {
+    _speechService.onVolumeChanged.listen((vol) {
       if (mounted) {
         setState(() {
           _currentVolume = vol;
@@ -120,33 +141,38 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
       }
     });
 
-    // Listen for incoming transcripts
-    _wsService.onTranscript.listen((data) {
-      final segId = data['segment_id'] as int?;
-      final status = data['status'] as String?;
-      final original = (data['original_text'] as String?) ?? "";
+    // Listen for speech recognition results directly from Apple Speech
+    _speechService.onSpeechResult.listen((event) {
+      final segId = event.segmentId;
+      final original = event.text;
+      final isFinal = event.isFinal;
 
-      if (original.isEmpty || segId == null) return;
+      if (original.isEmpty) return;
 
       setState(() {
         final matchIndex = _activeQueue.indexWhere((item) => item.segmentId == segId);
+        TranscriptSegment segment;
         if (matchIndex != -1) {
-          _activeQueue[matchIndex].originalText = original;
-          if (status == 'final') {
-            _activeQueue[matchIndex].isFinal = true;
+          segment = _activeQueue[matchIndex];
+          segment.originalText = original;
+          if (isFinal) {
+            segment.isFinal = true;
           }
         } else {
-          final newSeg = TranscriptSegment(
+          segment = TranscriptSegment(
             segmentId: segId,
             timestamp: DateTime.now(),
             originalText: original,
             translatedText: "翻譯中...",
-            isFinal: status == 'final',
+            isFinal: isFinal,
           );
-          _activeQueue.add(newSeg);
+          _activeQueue.add(segment);
         }
 
-        if (status == 'final') {
+        // Trigger real-time translation
+        _scheduleTranslation(segment, original, segId, isFinal);
+
+        if (isFinal) {
           // FIFO rolling buffer: retains 2-3 completed sentences before moving to transcript
           final completed = _activeQueue.where((s) => s.isFinal).toList();
           while (completed.length > _maxLiveCompleted) {
@@ -162,35 +188,42 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
         }
       });
     });
+  }
 
-    // Listen for incoming translations
-    _wsService.onTranslation.listen((data) {
-      final segId = data['segment_id'] as int?;
-      final status = data['status'] as String?;
-      final translated = (data['translated_text'] as String?) ?? "";
+  void _scheduleTranslation(TranscriptSegment segment, String text, int segId, bool isFinal) {
+    if (isFinal) {
+      _doTranslate(segment, text, segId);
+    } else {
+      _debounceTimer?.cancel();
+      _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+        _doTranslate(segment, text, segId);
+      });
+    }
+  }
 
-      if (translated.isEmpty || segId == null) return;
+  Future<void> _doTranslate(TranscriptSegment segment, String text, int segId) async {
+    final translated = await _translationService.translate(
+      text,
+      sourceLang: _sourceLang,
+      targetLang: _targetLang,
+    );
 
+    if (mounted) {
       setState(() {
-        // 1. Update in activeQueue
-        final liveMatch = _activeQueue.where((item) => item.segmentId == segId);
-        if (liveMatch.isNotEmpty) {
-          liveMatch.first.translatedText = translated;
-        }
+        segment.translatedText = translated;
 
-        // 2. Update in history
+        // Also update history if segment was already committed
         final histMatch = _history.where((item) => item.segmentId == segId);
         if (histMatch.isNotEmpty) {
           histMatch.first.translatedText = translated;
         }
       });
-    });
+    }
   }
 
   Future<void> _toggleRecording() async {
-    if (_audioService.isRecording) {
-      await _audioService.stopRecording();
-      _wsService.disconnect();
+    if (_speechService.isListening) {
+      await _speechService.stopListening();
       for (final item in _activeQueue) {
         item.isFinal = true;
         _commitToHistory(item);
@@ -198,9 +231,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
       setState(() {});
     } else {
       _activeQueue.clear();
-      await _wsService.connect(_serverUrl);
-      _wsService.sendConfig(sourceLang: _sourceLang, targetLang: _targetLang);
-      await _audioService.startRecording();
+      await _speechService.startListening(sourceLang: _sourceLang);
       setState(() {});
     }
   }
@@ -214,43 +245,141 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
   }
 
   void _openSettingsDialog() {
-    final urlController = TextEditingController(text: _serverUrl);
+    String tempSource = _sourceLang;
+    String tempTarget = _targetLang;
+    final apiKeyController = TextEditingController(text: _geminiApiKey);
+
     showCupertinoDialog(
       context: context,
       builder: (context) {
-        return CupertinoAlertDialog(
-          title: const Text("連線與語言設定"),
-          content: Column(
-            children: [
-              const SizedBox(height: 12),
-              CupertinoTextField(
-                controller: urlController,
-                placeholder: "WebSocket 伺服器網址 (ws://...)",
-                style: const TextStyle(fontSize: 13),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return CupertinoAlertDialog(
+              title: const Text("語言與翻譯設定"),
+              content: Material(
+                color: Colors.transparent,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 12),
+                    const Text(
+                      "語音輸入語言 (發言者)：",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: tempSource,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF1E293B),
+                          items: _sourceLanguages.entries.map((e) {
+                            return DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value, style: const TextStyle(fontSize: 13)),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setDialogState(() => tempSource = val);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      "翻譯目標語言 (字幕顯示)：",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: tempTarget,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF1E293B),
+                          items: _targetLanguages.entries.map((e) {
+                            return DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value, style: const TextStyle(fontSize: 13)),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setDialogState(() => tempTarget = val);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      "Gemini API Key (選填，啟用大模型潤色)：",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 4),
+                    CupertinoTextField(
+                      controller: apiKeyController,
+                      placeholder: "若留空則使用 Google 高速直連翻譯",
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(CupertinoIcons.checkmark_shield_fill, size: 14, color: Colors.lightBlueAccent),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              "目前為獨立離線/直連模式，無須啟動任何電腦後端服務。",
+                              style: TextStyle(fontSize: 11, color: Colors.lightBlueAccent),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                "iPhone/iPad 請填寫電腦區網 IP (如 ws://192.168.1.x:8000/ws/live)",
-                style: TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-            ],
-          ),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text("取消"),
-              onPressed: () => Navigator.pop(context),
-            ),
-            CupertinoDialogAction(
-              isDefaultAction: true,
-              child: const Text("儲存"),
-              onPressed: () {
-                setState(() {
-                  _serverUrl = urlController.text.trim();
-                });
-                Navigator.pop(context);
-              },
-            ),
-          ],
+              actions: [
+                CupertinoDialogAction(
+                  child: const Text("取消"),
+                  onPressed: () => Navigator.pop(context),
+                ),
+                CupertinoDialogAction(
+                  isDefaultAction: true,
+                  child: const Text("儲存"),
+                  onPressed: () {
+                    setState(() {
+                      _sourceLang = tempSource;
+                      _targetLang = tempTarget;
+                      _geminiApiKey = apiKeyController.text.trim();
+                      _translationService.geminiApiKey = _geminiApiKey;
+                    });
+                    Navigator.pop(context);
+                  },
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -273,9 +402,18 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
               child: const Icon(CupertinoIcons.mic_fill, size: 16, color: Colors.white),
             ),
             const SizedBox(width: 10),
-            const Text(
-              "即時會議翻譯",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "即時會議翻譯",
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  "${_sourceLanguages[_sourceLang]?.split(' ')[0] ?? _sourceLang} ➔ ${_targetLanguages[_targetLang]?.split(' ')[0] ?? _targetLang} (獨立運作)",
+                  style: const TextStyle(fontSize: 10, color: Colors.white54),
+                ),
+              ],
             ),
           ],
         ),
@@ -301,12 +439,12 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Prominent Subtitle Card
+            // Prominent Subtitle Card (Top)
             Padding(
               padding: const EdgeInsets.all(16.0),
               child: FloatingSubtitleCard(
                 activeQueue: _activeQueue,
-                isSpeaking: _audioService.isRecording,
+                isSpeaking: _speechService.isListening,
                 volume: _currentVolume,
                 isDualMode: _isDualMode,
                 fontSize: _subtitleFontSize,
@@ -328,7 +466,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
               ),
             ),
 
-            // Transcript Section
+            // Transcript History Section (Middle)
             Expanded(
               child: TranscriptListView(
                 history: _history,
@@ -341,7 +479,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
               ),
             ),
 
-            // Bottom Action Bar
+            // Bottom Action Bar (Bottom)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               decoration: const BoxDecoration(
@@ -352,7 +490,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
                 children: [
                   Expanded(
                     child: CupertinoButton(
-                      color: _audioService.isRecording
+                      color: _speechService.isListening
                           ? CupertinoColors.destructiveRed
                           : CupertinoColors.systemGreen,
                       borderRadius: BorderRadius.circular(12),
@@ -361,7 +499,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            _audioService.isRecording
+                            _speechService.isListening
                                 ? CupertinoIcons.stop_fill
                                 : CupertinoIcons.mic_fill,
                             size: 18,
@@ -369,7 +507,7 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            _audioService.isRecording ? "停止會議收音" : "開始會議收音",
+                            _speechService.isListening ? "停止會議收音" : "開始會議收音",
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -391,8 +529,8 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
 
   @override
   void dispose() {
-    _audioService.dispose();
-    _wsService.dispose();
+    _debounceTimer?.cancel();
+    _speechService.dispose();
     super.dispose();
   }
 }

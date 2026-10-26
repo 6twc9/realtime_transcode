@@ -29,6 +29,7 @@ cd /tmp && zip -q -r "$IPA_PATH" Payload
 rm -rf /tmp/Payload
 
 echo "==> 4. 安裝至 iPhone..."
+/Users/wadetseng/Library/Python/3.9/bin/pymobiledevice3 apps install --native "$IPA_PATH" || \
 /Users/wadetseng/Library/Python/3.9/bin/pymobiledevice3 apps install "$IPA_PATH"
 
 echo "==> 安裝成功！請直接在 iPhone 桌面開啟「即時會議翻譯」App。"
