@@ -32,13 +32,22 @@ class AudioService {
 
     try {
       // 16kHz, 1-channel mono, 16-bit PCM streaming
+      // Disable echoCancel on iOS to prevent VoiceProcessingIO (vpio) render err: -1
       const recordConfig = RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: 16000,
         numChannels: 1,
-        echoCancel: true,
-        noiseSuppress: true,
-        autoGain: true,
+        echoCancel: false,
+        noiseSuppress: false,
+        autoGain: false,
+        iosConfig: IosRecordConfig(
+          manageAudioSession: true,
+          categoryOptions: [
+            IosAudioCategoryOption.defaultToSpeaker,
+            IosAudioCategoryOption.allowBluetooth,
+            IosAudioCategoryOption.allowBluetoothA2DP,
+          ],
+        ),
       );
 
       final stream = await _recorder.startStream(recordConfig);

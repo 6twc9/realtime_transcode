@@ -101,6 +101,9 @@ class _MeetingMainScreenState extends State<MeetingMainScreen> {
   @override
   void initState() {
     super.initState();
+    if (Platform.isIOS || Platform.isAndroid) {
+      _serverUrl = "ws://192.168.68.55:8000/ws/live";
+    }
     _wsService = WebSocketService();
     _audioService = AudioService(_wsService);
 

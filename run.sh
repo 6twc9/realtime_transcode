@@ -29,5 +29,5 @@ echo "啟動服務於 http://127.0.0.1:8000 ..."
 # Open browser after 1.5 seconds in background
 (sleep 1.5 && open "http://127.0.0.1:8000") &
 
-# Start Uvicorn with reload support
-exec ./venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# Start Uvicorn with reload support (0.0.0.0 allows iPhone on the same Wi-Fi to connect)
+exec ./venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
