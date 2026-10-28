@@ -327,12 +327,16 @@ function syncConfigToWebSocket() {
 // 4. Visualizer & UI State
 function startVisualizer() {
   const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+  let silenceFrames = 0;
+  let isSpeaking = false;
 
   function updateMeter() {
     if (!isRecording || !analyserNode) {
       audioBars.forEach(b => b.style.height = "4px");
       audioDbText.textContent = "靜音中";
       subtitleCard.classList.remove("speaking");
+      isSpeaking = false;
+      silenceFrames = 0;
       return;
     }
 
@@ -349,12 +353,21 @@ function startVisualizer() {
       bar.style.height = `${height}px`;
     });
 
-    if (avg > 12) {
-      subtitleCard.classList.add("speaking");
-      audioDbText.textContent = `收音中`;
+    // Hysteresis to prevent border/shadow flickering
+    if (avg > 14) {
+      silenceFrames = 0;
+      if (!isSpeaking) {
+        isSpeaking = true;
+        subtitleCard.classList.add("speaking");
+        audioDbText.textContent = "收音中";
+      }
     } else {
-      subtitleCard.classList.remove("speaking");
-      audioDbText.textContent = `待命中`;
+      silenceFrames++;
+      if (silenceFrames > 20 && isSpeaking) {
+        isSpeaking = false;
+        subtitleCard.classList.remove("speaking");
+        audioDbText.textContent = "待命中";
+      }
     }
 
     requestAnimationFrame(updateMeter);
@@ -396,20 +409,38 @@ function renderLiveSubtitleCard() {
   if (!liveSubtitleBody) return;
 
   if (activeSubtitleQueue.length === 0) {
-    liveSubtitleBody.innerHTML = `
-      <div class="original-box ${isDualSub ? '' : 'hidden'}" id="liveOriginal">
-        <span class="placeholder-text">${isRecording ? "正在聆聽會議語音中，請對著麥克風說話..." : "點擊上方「開始會議收音」以啟動即時聽寫與翻譯..."}</span>
-      </div>
-      <div class="translated-box" id="liveTranslated">
-        <span class="placeholder-text">${isRecording ? "即時翻譯字幕將在此顯示..." : "翻譯字幕將即時顯示在此處"}</span>
-      </div>
-    `;
+    const origBox = liveSubtitleBody.querySelector("#liveOriginal");
+    const transBox = liveSubtitleBody.querySelector("#liveTranslated");
+    if (origBox && transBox) {
+      origBox.className = `original-box ${isDualSub ? '' : 'hidden'}`;
+      const spanOrig = origBox.querySelector(".placeholder-text");
+      if (spanOrig) spanOrig.textContent = isRecording ? "正在聆聽會議語音中，請對著麥克風說話..." : "點擊上方「開始會議收音」以啟動即時聽寫與翻譯...";
+      const spanTrans = transBox.querySelector(".placeholder-text");
+      if (spanTrans) spanTrans.textContent = isRecording ? "即時翻譯字幕將在此顯示..." : "翻譯字幕將即時顯示在此處";
+      const items = liveSubtitleBody.querySelectorAll(".live-sentence-item");
+      items.forEach(el => el.remove());
+    } else {
+      liveSubtitleBody.innerHTML = `
+        <div class="original-box ${isDualSub ? '' : 'hidden'}" id="liveOriginal">
+          <span class="placeholder-text">${isRecording ? "正在聆聽會議語音中，請對著麥克風說話..." : "點擊上方「開始會議收音」以啟動即時聽寫與翻譯..."}</span>
+        </div>
+        <div class="translated-box" id="liveTranslated">
+          <span class="placeholder-text">${isRecording ? "即時翻譯字幕將在此顯示..." : "翻譯字幕將即時顯示在此處"}</span>
+        </div>
+      `;
+    }
     return;
   }
 
-  const html = activeSubtitleQueue.map(item => {
+  // Clear placeholders if active queue has items
+  const origBox = liveSubtitleBody.querySelector("#liveOriginal");
+  if (origBox) origBox.remove();
+  const transBox = liveSubtitleBody.querySelector("#liveTranslated");
+  if (transBox) transBox.remove();
+
+  activeSubtitleQueue.forEach(item => {
     const isCompleted = item.isFinal;
-    const itemClass = isCompleted ? "live-sentence-item completed" : "live-sentence-item active";
+    let el = document.getElementById(`live-seg-${item.segmentId}`);
 
     const originalHtml = isCompleted
       ? escapeHtml(item.original)
@@ -427,15 +458,49 @@ function renderLiveSubtitleCard() {
       }
     }
 
-    return `
-      <div class="${itemClass}" id="live-seg-${item.segmentId}">
+    if (!el) {
+      el = document.createElement("div");
+      el.className = isCompleted ? "live-sentence-item completed new-enter" : "live-sentence-item active new-enter";
+      el.id = `live-seg-${item.segmentId}`;
+      el.innerHTML = `
         <div class="live-original ${isDualSub ? '' : 'hidden'}">${originalHtml}</div>
         <div class="live-translated">${transHtml}</div>
-      </div>
-    `;
-  }).join("");
+      `;
+      liveSubtitleBody.appendChild(el);
+    } else {
+      // In-place update to prevent DOM destruction and CSS animation re-triggering
+      if (isCompleted) {
+        if (!el.classList.contains("completed")) el.classList.add("completed");
+        el.classList.remove("active");
+      } else {
+        if (!el.classList.contains("active")) el.classList.add("active");
+        el.classList.remove("completed");
+      }
 
-  liveSubtitleBody.innerHTML = html;
+      const origDiv = el.querySelector(".live-original");
+      if (origDiv) {
+        origDiv.classList.toggle("hidden", !isDualSub);
+        if (origDiv.innerHTML !== originalHtml) {
+          origDiv.innerHTML = originalHtml;
+        }
+      }
+
+      const transDiv = el.querySelector(".live-translated");
+      if (transDiv && transDiv.innerHTML !== transHtml) {
+        transDiv.innerHTML = transHtml;
+      }
+    }
+  });
+
+  // Remove sentences that have rotated out of the live buffer
+  const activeIds = new Set(activeSubtitleQueue.map(item => `live-seg-${item.segmentId}`));
+  const domItems = liveSubtitleBody.querySelectorAll(".live-sentence-item");
+  domItems.forEach(domEl => {
+    if (!activeIds.has(domEl.id)) {
+      domEl.remove();
+    }
+  });
+
   liveSubtitleBody.scrollTop = liveSubtitleBody.scrollHeight;
 }
 
@@ -540,9 +605,14 @@ function handleTranslationUpdate(data) {
       const transBox = domElem.querySelector(".live-translated");
       if (transBox) {
         if (data.status === "partial" && !liveItem.isFinal) {
-          transBox.innerHTML = `<span class="partial-highlight">${escapeHtml(trans)}</span>`;
+          const targetHtml = `<span class="partial-highlight">${escapeHtml(trans)}</span>`;
+          if (transBox.innerHTML !== targetHtml) {
+            transBox.innerHTML = targetHtml;
+          }
         } else {
-          transBox.textContent = trans;
+          if (transBox.textContent !== trans) {
+            transBox.textContent = trans;
+          }
         }
       }
     } else {
@@ -562,7 +632,7 @@ function updateTranscriptItemDOM(segId, translatedText) {
   const domElem = document.getElementById(`seg-${segId}`);
   if (domElem) {
     const transBox = domElem.querySelector(".item-translated");
-    if (transBox) {
+    if (transBox && transBox.textContent !== translatedText) {
       transBox.textContent = translatedText;
     }
   }
@@ -571,39 +641,67 @@ function updateTranscriptItemDOM(segId, translatedText) {
 function renderTranscriptList() {
   if (transcriptHistory.length === 0) {
     emptyState.style.display = "flex";
-    transcriptList.innerHTML = "";
-    transcriptList.appendChild(emptyState);
+    const items = transcriptList.querySelectorAll(".transcript-item");
+    items.forEach(el => el.remove());
+    if (!transcriptList.contains(emptyState)) {
+      transcriptList.appendChild(emptyState);
+    }
     transcriptCount.textContent = "0 則紀錄";
     return;
   }
 
   emptyState.style.display = "none";
-  transcriptList.innerHTML = "";
 
+  // Incremental append/update to prevent screen strobe and layout jumping
+  const historyIds = new Set();
   transcriptHistory.forEach((item, index) => {
-    const el = document.createElement("div");
-    el.className = "transcript-item";
-    el.id = `seg-${item.segmentId}`;
-    el.innerHTML = `
-      <div class="item-meta">
-        <span class="item-time">[${item.time}]</span>
-        <button class="item-copy-btn" onclick="copyItem(${index})">複製</button>
-      </div>
-      <div class="item-original">${escapeHtml(item.original)}</div>
-      <div class="item-translated">${escapeHtml(item.translated)}</div>
-    `;
-    transcriptList.appendChild(el);
+    historyIds.add(`seg-${item.segmentId}`);
+    let el = document.getElementById(`seg-${item.segmentId}`);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "transcript-item";
+      el.id = `seg-${item.segmentId}`;
+      el.innerHTML = `
+        <div class="item-meta">
+          <span class="item-time">[${item.time}]</span>
+          <button class="item-copy-btn" onclick="copyItem('${item.segmentId}')">複製</button>
+        </div>
+        <div class="item-original">${escapeHtml(item.original)}</div>
+        <div class="item-translated">${escapeHtml(item.translated)}</div>
+      `;
+      transcriptList.appendChild(el);
+    } else {
+      const origDiv = el.querySelector(".item-original");
+      if (origDiv && origDiv.textContent !== item.original) {
+        origDiv.textContent = item.original;
+      }
+      const transDiv = el.querySelector(".item-translated");
+      if (transDiv && transDiv.textContent !== item.translated) {
+        transDiv.textContent = item.translated;
+      }
+    }
+  });
+
+  const domItems = transcriptList.querySelectorAll(".transcript-item");
+  domItems.forEach(domEl => {
+    if (!historyIds.has(domEl.id)) {
+      domEl.remove();
+    }
   });
 
   transcriptCount.textContent = `${transcriptHistory.length} 則紀錄`;
 
-  if (autoScrollCheck.checked) {
+  if (autoScrollCheck && autoScrollCheck.checked) {
     transcriptList.scrollTop = transcriptList.scrollHeight;
   }
 }
 
-window.copyItem = function(index) {
-  const item = transcriptHistory[index];
+window.copyItem = function(idOrIdx) {
+  let item = typeof idOrIdx === "number" ? transcriptHistory[idOrIdx] : transcriptHistory.find(h => h.segmentId === idOrIdx);
+  if (!item && typeof idOrIdx === "string") {
+    const num = parseInt(idOrIdx, 10);
+    if (!isNaN(num) && transcriptHistory[num]) item = transcriptHistory[num];
+  }
   if (item) {
     navigator.clipboard.writeText(`${item.original}\n${item.translated}`);
   }

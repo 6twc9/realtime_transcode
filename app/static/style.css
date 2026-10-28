@@ -234,7 +234,7 @@ body {
   box-shadow: var(--card-shadow);
   overflow: hidden;
   position: relative;
-  transition: all 0.3s ease;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
 .live-subtitle-card.speaking {
@@ -353,8 +353,13 @@ body {
   gap: 5px;
   padding: 8px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  animation: fadeIn 0.25s ease;
+  transition: opacity 0.2s ease;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.live-sentence-item.new-enter {
+  animation: fadeIn 0.2s ease-out;
 }
 
 body.light-theme .live-sentence-item {
@@ -570,7 +575,9 @@ body.light-theme .live-sentence-item.active .live-translated {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  animation: fadeIn 0.3s ease;
+  animation: fadeIn 0.25s ease;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 @keyframes fadeIn {
